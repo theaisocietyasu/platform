@@ -17,13 +17,16 @@ path that the policy allows for that org. Every container runs with no-new-privi
 org's no_new_privileges_off lists: databases whose images drop privileges with gosu. The parts of one app share a
 group network (app-<org>--<group>), where each answers to its
 alias. The policy's host_control list names the other containers and systemd units that the superadmin may start,
-stop, restart and read the logs of. Standard library only. See docs/operations.md, "This server runner".
+stop, restart and read the logs of. The policy's commands map names to fixed command lines that the superadmin may
+run; a request names a command and sends no arguments. The policy's shell, off unless enabled is true, runs any
+command line as its unprivileged user, never root. Standard library only. See docs/operations.md, "This server runner".
 """
 
 import argparse
 import fnmatch
 import json
 import os
+import pwd
 import re
 import shutil
 import socket
@@ -31,6 +34,7 @@ import socketserver
 import subprocess  # nosec B404 - runs podman with fixed arguments
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler
@@ -107,6 +111,8 @@ def load_policy_dict(policy: dict) -> dict:
     policy.setdefault("port_range", [20000, 20999])
     policy.setdefault("orgs", {})
     policy.setdefault("host_control", {"containers": [], "units": []})
+    policy.setdefault("commands", {})
+    policy.setdefault("shell", {"enabled": False})
     # A container on podman's default network keeps the bridge, and so the 10.88.0.1 bind address, in place
     policy.setdefault("bridge_image", "docker.io/library/nginx:alpine")
     return policy
@@ -547,6 +553,126 @@ def host_control(policy: dict, kind: str, name: str, action: str, query: dict) -
     return {"name": name, "state": state}
 
 
+MAX_COMMAND_OUTPUT = 20_000
+COMMAND_TIMEOUT_SECONDS = 600
+
+
+def _command(policy: dict, name: str) -> dict:
+    """The policy's command of this name: argv (a list of strings), optional cwd, timeout and description."""
+    entry = (policy.get("commands") or {}).get(name) if HOST_NAME.match(name) else None
+    if not isinstance(entry, dict) or not isinstance(entry.get("argv"), list) or not entry["argv"]:
+        raise Refused(f"{name} is not in the commands of the policy", 403)
+    if not all(isinstance(a, str) for a in entry["argv"]):
+        raise Refused(f"The argv of {name} must be a list of strings", 500)
+    return entry
+
+
+def list_commands(policy: dict) -> dict:
+    """The name and description of each command of the policy."""
+    commands = policy.get("commands") or {}
+    return {
+        "commands": [
+            {"name": name, "description": str(entry.get("description") or "")}
+            for name, entry in sorted(commands.items())
+            if isinstance(entry, dict)
+        ]
+    }
+
+
+def run_command(policy: dict, name: str) -> dict:
+    """Run one command of the policy with its fixed argv. Nothing from the request reaches the command line."""
+    entry = _command(policy, name)
+    argv = [str(a) for a in entry["argv"]]
+    path = shutil.which(argv[0])
+    if path is None:
+        raise Refused(f"{argv[0]} is not installed on this server", 500)
+    timeout = min(int(entry.get("timeout") or COMMAND_TIMEOUT_SECONDS), COMMAND_TIMEOUT_SECONDS)
+    cwd = entry.get("cwd") if isinstance(entry.get("cwd"), str) else None
+    started = time.monotonic()
+    try:
+        result = subprocess.run(  # nosec B603 - argv comes from the policy file, not the request
+            [path, *argv[1:]], cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False
+        )
+        output, code, timed_out = (result.stdout or "") + (result.stderr or ""), result.returncode, False
+    except subprocess.TimeoutExpired as e:
+        raw = e.output or b""
+        output = raw.decode(errors="replace") if isinstance(raw, bytes) else str(raw)
+        code, timed_out = None, True
+    return {
+        "name": name,
+        "exit_code": code,
+        "timed_out": timed_out,
+        "seconds": round(time.monotonic() - started, 1),
+        "output": output[-MAX_COMMAND_OUTPUT:],
+        "truncated": len(output) > MAX_COMMAND_OUTPUT,
+    }
+
+
+MAX_SHELL_COMMAND = 4000
+SHELL_TIMEOUT_SECONDS = 120
+SHELL_PATH = "/usr/local/bin:/usr/bin:/bin"
+
+
+def shell_user(policy: dict) -> pwd.struct_passwd:
+    """The account the shell runs as. Refused when the shell is off, the user is missing, or the user is root."""
+    shell = policy.get("shell") or {}
+    if shell.get("enabled") is not True:
+        raise Refused("The shell is off in the policy of this server", 403)
+    name = shell.get("user")
+    if not isinstance(name, str) or not name:
+        raise Refused("The shell of the policy names no user", 500)
+    try:
+        account = pwd.getpwnam(name)
+    except KeyError as e:
+        raise Refused(f"The shell user {name} does not exist on this server", 500) from e
+    if account.pw_uid == 0 or account.pw_gid == 0:
+        raise Refused("The shell user must not be root", 500)
+    return account
+
+
+def run_shell(policy: dict, body: dict) -> dict:
+    """Run one command line with bash as the policy's shell user, in a new session that a timeout kills whole."""
+    account = shell_user(policy)
+    command = body.get("command")
+    if not isinstance(command, str) or not command.strip() or len(command) > MAX_SHELL_COMMAND or "\0" in command:
+        raise Refused(f"command must be text of 1 to {MAX_SHELL_COMMAND} characters")
+    shell = policy.get("shell") or {}
+    timeout = min(int(shell.get("timeout") or SHELL_TIMEOUT_SECONDS), COMMAND_TIMEOUT_SECONDS)
+    cwd = shell.get("cwd") if isinstance(shell.get("cwd"), str) else account.pw_dir
+    env = {"PATH": SHELL_PATH, "HOME": account.pw_dir, "USER": account.pw_name, "LANG": "C.UTF-8"}
+    actor = str(body.get("actor") or "unknown")[:128]
+    sys.stderr.write(f"runner: shell by {actor} as {account.pw_name}: {command[:500]!r}\n")
+    started = time.monotonic()
+    process = subprocess.Popen(  # nosec B603 - the superadmin's command, as the policy's unprivileged user
+        ["/bin/bash", "--noprofile", "--norc", "-c", command],
+        user=account.pw_uid,
+        group=account.pw_gid,
+        extra_groups=[],
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    try:
+        raw, _ = process.communicate(timeout=timeout)
+        code, timed_out = process.returncode, False
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, 9)
+        raw, _ = process.communicate()
+        code, timed_out = None, True
+    output = (raw or b"").decode(errors="replace")
+    return {
+        "user": account.pw_name,
+        "exit_code": code,
+        "timed_out": timed_out,
+        "seconds": round(time.monotonic() - started, 1),
+        "output": output[-MAX_COMMAND_OUTPUT:],
+        "truncated": len(output) > MAX_COMMAND_OUTPUT,
+    }
+
+
 def health(org: str | None, app: str, port: int, path: str | None) -> dict:
     """GET path on the container's port, from the host: on 127.0.0.1 when the port is published, else on the
     container's own address. With path None, only check that the port accepts a connection."""
@@ -619,6 +745,12 @@ class Handler(BaseHTTPRequestHandler):
                 )
             if method == "GET" and parts == ["apps"]:
                 return self._answer(200, {"apps": [describe(i) for i in managed()]})
+            if method == "GET" and parts == ["host", "commands"]:
+                return self._answer(200, list_commands(self.policy))
+            if method == "POST" and len(parts) == 3 and parts[:2] == ["host", "commands"]:
+                return self._answer(200, run_command(self.policy, parts[2]))
+            if method == "POST" and parts == ["host", "shell"]:
+                return self._answer(200, run_shell(self.policy, self._body()))
             if len(parts) == 4 and parts[0] == "host":
                 kind, host_name, action = parts[1], parts[2], parts[3]
                 allowed = (method == "GET" and action == "logs") or (

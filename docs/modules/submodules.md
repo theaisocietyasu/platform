@@ -1,6 +1,6 @@
 # Shared content (submodules)
 
-Shared content is content made once for every org, such as one campus or careers, that an org subscribes to. The dashboard calls it shared content; the code calls each one a submodule. Each module that reads the submodule gets its part: public pages for [knowledge](./knowledge.md), live queries for agents, feeds for [Feeds](./feeds.md), and the school's Canvas URL for [accounts](./accounts.md). Submodules are folders in [`submodules/`](../../submodules/README.md) of the repo. A submodule holds content and settings, not new behavior. Features are [modules](../writing-a-module.md).
+Shared content is content made once for every org, such as one campus or careers, that an org subscribes to. The dashboard calls it shared content; the code calls each one a submodule. Each module that reads the submodule gets its part: public pages for [knowledge](./knowledge.md), live queries for agents, and feeds for [Feeds](./feeds.md). Submodules are folders in [`submodules/`](../../submodules/README.md) of the repo. A submodule holds content and settings, not new behavior. Features are [modules](../writing-a-module.md).
 
 The deployment crawls and embeds a submodule's pages once, for every org that subscribes. The pages are the submodule's own sources: they have no org, and they count against no org's limits.
 
@@ -14,12 +14,11 @@ flowchart LR
   query --> index["submodules.index_result"]
   index --> own["A source of the org"]
   catalog -->|feeds| feeds["Feed presets of each subscribed org"]
-  catalog -->|canvas_url| accounts["accounts"]
 ```
 
 | Submodule | Content |
 | --- | --- |
-| [asu](../../submodules/asu/README.md) | Arizona State University: library hours, events, courses, dining, scholarships, news, shuttles, jobs, sports; the ASU Canvas URL; the ASU sign-in for Sun Devil Central ([Sign in to ASU](../integrations.md#sign-in-to-asu)) |
+| [asu](../../submodules/asu/README.md) | Arizona State University: library hours, events, courses, dining, scholarships, news, shuttles, jobs, sports; the ASU sign-in for Sun Devil Central ([Sign in to ASU](../integrations.md#sign-in-to-asu)) |
 | [careers](../../submodules/careers/__init__.py) | Feeds for software internships, new grad roles and hackathons (`feeds`) |
 
 ## Subscribe an org
@@ -52,7 +51,7 @@ Each org can have `submodules.subscriptions` subscriptions, 20 by default ([Limi
 
 The older `POST /api/submodules/<submodule>/sync`, `POST /api/dashboard/<org>/knowledge/submodules/<submodule>/sync` and `/api/asu/*` routes still answer. A sync subscribes.
 
-Tools: `submodules.list` (`submodules:read`), `submodules.subscribe` and `submodules.unsubscribe` (`submodules:manage`, confirm), and `submodules.query` and `search` (`knowledge:read`).
+Tools: `modules.submodules` (`submodules:read`), `modules.subscribe` and `modules.unsubscribe` (`submodules:manage`, confirm), and `knowledge.query` and `search` (`knowledge:read`).
 
 `search(query, source?)` is the one search an agent needs. It takes a plain query and fills the live query's parameters from it, so the agent never sees parameter names.
 
@@ -66,7 +65,7 @@ flowchart LR
   N -->|live kind| L
 ```
 
-It answers `{"from": "stored", "results": [...]}`, `{"from": "live", "source", "url", "text"}`, or `{"from": "none", "note"}`. Stored results older than `SEARCH_STALE_DAYS` add a `note` to read the url again. A query that misses a required value, like a campus for `dining`, returns 422 naming the values to add. `knowledge.submodules` and `knowledge.sync_submodule` do the same as `submodules.list` and `submodules.subscribe`.
+It answers `{"from": "stored", "results": [...]}`, `{"from": "live", "source", "url", "text"}`, or `{"from": "none", "note"}`. Stored results older than `SEARCH_STALE_DAYS` add a `note` to read the url again. A query that misses a required value, like a campus for `dining`, returns 422 naming the values to add. `knowledge.submodules` and `knowledge.sync_submodule` do the same as `modules.submodules` and `modules.subscribe`.
 
 Platform checks the parameters of a live query before it gets a page. An unknown submodule or query returns 404. A bad parameter returns 422 with the values the query accepts. A failed fetch returns 502. After the answer, the `submodules.index_result` job adds the result to the org's knowledge as its own `<submodule>-live/<query>-<hash>` source. It never writes into a shared page, and it does not write a result that did not change. A query with `index=False`, such as `web`, is not indexed.
 

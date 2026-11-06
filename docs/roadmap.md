@@ -31,7 +31,6 @@ flowchart LR
 - [x] Move the vault (vault.thesoda.io) into a shared app.
 - [x] Add the embedding server (Qwen3-Embedding-0.6B, llama.cpp) as a shared app. It is off by default: the deployment and the orgs keep their embedder until someone points theirs at it, which needs a re-embed.
 - [ ] Templates that make several apps and link them.
-- [ ] Take `canvas_url` from the org's subscribed submodules, not the deployment.
 - [ ] Deployment-wide limits on shared submodule passages and embeddings.
 
 ## Core
@@ -75,7 +74,6 @@ Campus content is a submodule in `submodules/`, such as `submodules/asu`. Anothe
 - `POST /api/storefront/<org>/members/orders` writes a pending order and takes no points. An officer must check the balance before delivery.
 - `error_handler` returns the exception text to the client.
 - `GET /api/organizations/<id>/stats`, `/activity` and `/roles` return fixed sample data.
-- `superadmin_required` accepts a session only with `role == "admin"`, which sign-in never sets. Only the header path works.
 - `GameCog` keeps the game state in memory, and a restart loses it.
 - The calendar sync needs the Notion properties `Name`, `Date`, `Location`, `Description` and `gcal_id`. If one has a different name, the sync skips the event and logs a warning.
 - The points CSV upload gives no progress or result. Errors go only to the log.

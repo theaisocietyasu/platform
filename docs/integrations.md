@@ -72,14 +72,14 @@ Platform gives tools in two ways:
 | Notion, signed in | `NOTION_MCP_URL`, default `https://mcp.notion.com/mcp`, as the officer who signed in | `notion:read`: the tools the server marks read-only, such as `notion.notion-search`. `notion:write`: the other tools |
 | Google, signed in | Google's Gmail, Drive and Calendar MCP servers (`gmailmcp`, `drivemcp`, `calendarmcp.googleapis.com`), as the officer who signed in | `gmail.*`: `gmail:read` and `gmail:send`. `drive.*` and `calendar.*`: `google:read` and `google:write` |
 | Web search | The org's SearXNG, or the one in `.env` | `web:read`: `search` |
-| ASU, signed in | Sun Devil Central in a headless browser, with the cookies of the officer who signed in | `asu:read`: `asu.clubs`, `asu.events` |
+| ASU, signed in | Sun Devil Central in a headless browser, with the cookies of the officer who signed in | `knowledge:read`: the `clubs` and `club_events` live queries |
 
 - A tool name starts with the service key, such as `github.list_issues` or `google.drive_search`.
 - A tool that changes something runs only with `confirm=true`. Without it, the call returns what it would do.
 - Google and Notion tools use only the org's own keys, never a default in `.env`. So an agent reads only its own org's data.
 - Google: share a calendar, Drive file or Sheet with the service account's email to let the tools see it. A service account has no mailbox, so the Gmail tools show only when the org sets **Act as Workspace user**. That works only in a Google Workspace domain whose admin allows the service account's client ID these scopes under domain-wide delegation: `calendar`, `drive.readonly`, `spreadsheets`, `gmail.readonly`, `gmail.send`.
 - Notion: share each page or database with the integration in Notion.
-- Token limits narrow a token further. `repos` lists the GitHub repos a call may act on, as `owner/name` or `owner/*`. With `repos`, the token sees only tools that take one repo. A call with `repos` must give `owner` and `repo` as one name each. A name with `/`, `..` or another character that GitHub does not allow gets 403. `tools` lists GitHub tool name patterns, such as `github.*issue*`. Set both on the Tokens page.
+- Token limits narrow a token further. `repos` lists the GitHub repos a call may act on, as `owner/name` or `owner/*`. With `repos`, the token sees only tools that take one repo. A call with `repos` must give `owner` and `repo` as one name each. A name with `/`, `..` or another character that GitHub does not allow gets 403. `tools` lists GitHub tool name patterns, such as `github.*issue*`. Set both on the Connections page.
 - Each call is in the audit log and its failures are in the error log, as for other tools.
 - Every org secret value in a result is replaced by `[secret]`, for example a key that a CI log prints.
 
@@ -89,7 +89,7 @@ An agent with `github:read` and `github:write` can find a failure and send the f
 
 ```mermaid
 flowchart LR
-  A[Agent] --> E["errors.list, apps.logs, github.actions_list, github.get_job_logs"]
+  A[Agent] --> E["activity.errors, hosting.logs, github.actions_list, github.get_job_logs"]
   A --> B["github.create_branch, github.push_files"]
   B --> P["github.create_pull_request"]
   P --> CI[GitHub Actions run the tests]
@@ -98,7 +98,7 @@ flowchart LR
 
 Platform checks each GitHub write before it passes it on:
 
-- **Linked repos.** When the org lists repos on the CI tab of Activity (`ci.set_repos`), a write runs only on those repos. A write that names no repo is refused. Reads are not limited.
+- **Linked repos.** When the org lists repos on the CI tab of Activity (`activity.set_ci_repos`), a write runs only on those repos. A write that names no repo is refused. Reads are not limited.
 - **No push to the default branch.** `push_files`, `create_or_update_file` and `delete_file` need a `branch` that is not the repo's default branch.
 - **Merge on green.** `merge_pull_request` runs only when the pull request is open and every check on its head commit passed. A pending check also refuses it.
 
@@ -123,12 +123,12 @@ Sun Devil Central, the ASU club system, needs an ASU sign-in. An officer signs i
 1. On the Shared tab of Explore, subscribe to Arizona State University, then click **Sign in to ASU** on its card.
 2. Type your NetID and password, and click **Sign in**.
 3. Approve the Duo push on your phone. If Duo shows a code, the card shows the same code. Type it in the Duo app.
-4. When the card shows **Signed in**, give a token the `asu:read` scope.
+4. When the card shows **Signed in**, agents with `knowledge:read` can search `clubs` and `club_events`.
 
 - Platform keeps only the browser cookies, as the org secret `asu_session`, encrypted with `SECRETS_KEY`. It does not keep, log or audit the NetID or the password.
-- The tools `asu.clubs` and `asu.events` show only when the org subscribes to ASU and has a saved sign-in. They are read-only. Their results go only to the caller. Platform never adds them to knowledge.
-- `asu.events` also reads the public ASU events calendar. If the sign-in expired, it returns the calendar and says that it did not read Sun Devil Central.
-- When a page load ends on a sign-in page, the sign-in has expired. The tools return an error, the card shows **Sign-in expired**, and Platform sends the event `asu.session_expired` one time. The notification links to the Shared tab of Explore. Sign in again to clear it.
+- The live queries `clubs` and `club_events` run only when the org subscribes to ASU and has a saved sign-in. Any live query can name a sign-in this way (`signin` on a `QuerySource`, registered in `modules/submodules/signins.py`). Their results go only to the caller. Platform never adds them to knowledge.
+- The public ASU events calendar is the `events` live query, with no sign-in.
+- When a page load ends on a sign-in page, the sign-in has expired. The queries return an error, the card shows **Sign-in expired**, and Platform sends the event `asu.session_expired` one time. The notification links to the Shared tab of Explore. Sign in again to clear it.
 - **Sign out** removes the saved cookies.
 - The sign-in runs in a browser on the API. The API process keeps the state of each attempt in memory, so run one API worker (the default).
 

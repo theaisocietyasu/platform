@@ -242,3 +242,21 @@ def host_action(kind: str, name: str, action: str) -> dict:
 def host_logs(kind: str, name: str, lines: int) -> str:
     path = f"/host/{quote(kind, safe='')}/{quote(name, safe='')}/logs?lines={int(lines)}"
     return str(call("GET", path)["logs"])
+
+
+def host_commands() -> list[dict]:
+    """The named commands the runner's policy lists: name and description."""
+    return list(call("GET", "/host/commands").get("commands") or [])
+
+
+def host_command(name: str) -> dict:
+    """Run one named command of the runner's policy. The result has exit_code, output and whether it timed out."""
+    return dict(call("POST", f"/host/commands/{quote(name, safe='')}"))
+
+
+MAX_SHELL_COMMAND = 4000
+
+
+def host_shell(command: str, actor: str) -> dict:
+    """Run a command line with the runner's shell, as its unprivileged user. The runner refuses when the shell is off."""
+    return dict(call("POST", "/host/shell", {"command": command, "actor": actor}))
